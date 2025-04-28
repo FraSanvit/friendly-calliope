@@ -3,13 +3,14 @@ import argparse
 import pandas as pd
 import numpy as np
 import xarray as xr
+import copy
 
 import calliope
 from calliope.core.util.dataset import split_loc_techs
 
 from friendly_calliope.io import get_models_from_file, write_dpkg
 
-ZERO_THRESHOLD = 5e-6  # capacities lower than this will be considered as effectively zero
+ZERO_THRESHOLD = 5e-12  # capacities lower than this will be considered as effectively zero, default: 5e-6
 COST_NAME_MAPPING = {
     'cost_energy_cap': "cost_per_nameplate_capacity",
     'cost_om_prod': "cost_per_flow_out",
@@ -36,12 +37,77 @@ EMISSIONS_NAME_MAPPING = {
     'cost_var': 'total_operation_emissions',
 }
 
+OLD_TECH_NAMES = {
+    'battery': "Battery storage",
+    'biofuel_boiler': "Biomass boiler",
+    'biofuel_supply': "Biofuel",
+    'biogas_supply': "Biogas",
+    'biofuel_to_diesel': "Biofuel to vehicle fuel (we only consider diesel) converter",
+    'biofuel_to_liquids': "Biofuel to liquid fuels converter",
+    'biofuel_to_methane': "Biofuel to Methane converter",
+    'biofuel_to_methanol': "Biofuel to Methanol converter",
+    'ccgt': "Combined cycle gas turbine",
+    'chp_biofuel_extraction': "Centralised biofuel steam extraction turbine combined heat and power",
+    'chp_wte_back_pressure': "Centralised waste stream back pressure combined heat and power",
+    'dac': "Direct air CO2 capture",
+    'electric_heater': "Electrical heater",
+    'electric_hob': "Electric cooking element",
+    'electrolysis': "Hydrogen by electrolysis",
+    'gas_hob': "Electric cooking element",
+    'heat_storage_big': "District-scale heat storage vessels",
+    'heat_storage_small': "Building-scale heat storage vessels",
+    'heavy_transport_ev': "Electric heavy vehicles",
+    'heavy_transport_ice': "Internal combustion engine heavy vehicles",
+    'hp': "Heat pump",
+    'hydro_reservoir': "Hydro electricity with a reservoir.",
+    'hydro_run_of_river': "Run of river hydro electricity",
+    'hydrogen_storage': "Hydrogen power storage",
+    'hydrogen_to_liquids': "Hydrogen to liquid fuels converter",
+    'hydrogen_to_methane': "Hydrogen to Methane converter",
+    'hydrogen_to_methanol': "Hydrogen to Methanol converter",
+    'light_transport_ev': "Electric light vehicles",
+    'light_transport_ice': "Internal combustion engine light vehicles",
+    'methane_boiler': "Gas boiler",
+    'methane_storage': "Underground methane storage",
+    'nuclear': "Nuclear power",
+    'open_field_pv': "Open field PV",
+    'pumped_hydro': "Pumped hydro power storage",
+    'roof_mounted_pv': "Roof mounted PV",
+    'syn_diesel_converter': "Dummy tech to allow synthetic diesel to meet demand",
+    'syn_diesel_distribution_import': "syn_diesel_distribution_import",
+    'syn_kerosene_converter': "Dummy tech to allow synthetic kerosene to meet demand",
+    'syn_kerosene_distribution_import': "syn_kerosene_distribution_import",
+    'syn_methane_converter': "Dummy tech to allow synthetic methane to meet demand",
+    'syn_methane_distribution_import': "syn_methane_distribution_import",
+    'syn_methanol_converter': "Dummy tech to allow synthetic methanol to meet demand",
+    'syn_methanol_distribution_import': "syn_methanol_distribution_import",
+    'waste_supply': "Municipal waste supply",
+    'wind_offshore': "Offshore wind",
+    'wind_onshore': "Onshore wind"
+}
+
 NEW_TECH_NAMES = {
     "heat_storage_big": "District-scale heat storage vessels",
     "heat_storage_small": "Building-scale heat storage vessels",
     "wind_onshore": "Onshore wind",
+    "chp_wte_back_pressure_ccs": "Centralised waste stream back pressure combined heat and power with CCS",
+    "ccgt_ccs": "Combined cycle gas turbine with CCS",
+    'chp_biofuel_extraction_ccs': "Centralised biofuel steam extraction turbine combined heat and power with CCS",
+    "chp_hydrogen": "Centralised hydrogen-fuelled combined heat and power plant",
+    "chp_methane_extraction": "Centralised hydrogen steam extraction turbine combined heat and power",
+    "biogas_to_electricity_supply": "Anaerobic digestion plant plus cnversion into electricity",
+    "chp_biomethane_extraction": "Centralised biomethane steam extraction turbine combined heat and power",
+    "chp_biomethane_extraction_ccs": "Centralised biomethane steam extraction turbine combined heat and power with CCS",
+    "biomethane_converter": "Dummy tech to allow biomethane to meet demand",
+    "biogas_upgrading": "Conversion of biogas into biomethane",
+    
 }
 
+loc_newtech_dict = {
+    "heat_storage_big": "heat",
+    "heat_storage_small": "heat",
+    "wind_onshore": "electricity"
+}
 
 def combine_scenarios_to_one_dict(
     model_dict, cost_optimal_model=None, new_dimension_name="scenario", return_hourly=True,
@@ -55,22 +121,47 @@ def combine_scenarios_to_one_dict(
         cost_optimal_model = list(model_dict.values())[0]
     if isinstance(new_dimension_name, str):
         new_dimension_name = [new_dimension_name]
-
+     
+    cost_optimal_model = list(model_dict.values())[0]
+    #print("model.inputs type:  ",type(cost_optimal_model.inputs))
+    #print("model.inputs.timesteps:  ",cost_optimal_model.inputs.timesteps)
+    #print("len of model.inputs.timesteps:  ",len(list(cost_optimal_model.inputs.timesteps)))
+   # print("len of model.inputs.coords['timesteps']:  ",len(cost_optimal_model.inputs.coords['timesteps']))
+    
+    names = pd.Series(list(cost_optimal_model._model_data.techs_conversion_plus.values) + list(cost_optimal_model._model_data.techs_conversion.values))
+    
+    # loc_tech_carrier = pd.Series(model._model_data.loc_tech_carriers_prod.values)
+    # timestep = cost_optimal_model.inputs.timestep_resolution.mean().item()
+    timestep = round(8760/len(list(cost_optimal_model.inputs.timesteps))) # to be reactivated
+    # timestep =int(1)
+    
+    """
+    names = cost_optimal_model._model_data.techs_conversion_plus.values
     names = cost_optimal_model.inputs.names.to_series()
+    print(cost_optimal_model.inputs)
     kwargs["timestep_resolution"] = cost_optimal_model.inputs.timestep_resolution.mean().item()
     assert cost_optimal_model.inputs.timestep_resolution.std().item() == 0, "Can only work with a consistent timestep resolution"
-
+    """
     all_data_dict.update(get_input_costs(cost_optimal_model.inputs, **kwargs))
     energy_caps = pd.concat(
         [get_energy_caps(model, **kwargs) for model in model_dict.values()],
         keys=model_dict.keys(), names=new_dimension_name,
     )
     valid_loc_techs = get_valid_loc_techs(energy_caps)
+    
+    valid_tech_list = energy_caps.index.get_level_values("techs")
+    demand_list = tech_list_subset(energy_caps,"demand")
+    distribution_export_list = tech_list_subset(energy_caps,"distribution_export")
+    exception_tech_list = ["demand_co2"]
+    
+    tech_list_to_remove = list(set(demand_list+distribution_export_list)-set(exception_tech_list))
+    
     kwargs["valid_loc_techs"] = valid_loc_techs
     # We kept demand and export techs in for the 'valid loc techs'. We remove them here.
-    energy_caps = energy_caps[energy_caps.index.get_level_values("techs").str.find("demand") == -1]
-    energy_caps = energy_caps[energy_caps.index.get_level_values("techs").str.find("distribution_export") == -1]
-
+    # energy_caps = energy_caps[energy_caps.index.get_level_values("techs").str.find("demand") == -1]
+    # energy_caps = energy_caps[energy_caps.index.get_level_values("techs").str.find("distribution_export") == -1]
+    energy_caps = df_subset(energy_caps,tech_list_to_remove)
+    
     output_costs = pd.concat(
         [get_output_costs(model, **kwargs) for model in model_dict.values()],
         keys=model_dict.keys(), names=new_dimension_name
@@ -87,7 +178,6 @@ def combine_scenarios_to_one_dict(
         )
         dataframe_to_dict_elements(output_emissions, all_data_dict)
 
-
     energy_flows = pd.concat(
         [get_flows(model, None, **kwargs) for model in model_dict.values()],
         keys=model_dict.keys(), names=new_dimension_name,
@@ -98,8 +188,20 @@ def combine_scenarios_to_one_dict(
     energy_flows_monthly_max = agg_flows(energy_flows, "max", "1M")
 
     get_transmission_data(all_data_dict, model_dict, new_dimension_name, **kwargs)
+    
+    # energy_caps = add_units_to_caps(energy_caps, energy_flows_max, cost_optimal_model)
+    carrier_dict, unit_dict = get_carrier_unit_per_energy_cap(energy_flows_max)
+    energy_caps_primary_carrier = adding_carrier_unit_to_energy_cap(energy_caps, unit_dict, carrier_dict, ZERO_THRESHOLD)
+    energy_caps_from_flows = add_units_all_caps(energy_flows_max, timestep)
+    energy_caps_all_carriers = get_final_energy_cap(energy_caps_primary_carrier, energy_caps_from_flows, energy_flows_sum, ZERO_THRESHOLD)
+    # all_data_dict["nameplate_capacity_primary_carrier"]=energy_caps_primary_carrier
 
-    energy_caps = add_units_to_caps(energy_caps, energy_flows_max, cost_optimal_model)
+    """
+    energy_caps = pd.concat(
+        [get_energy_caps(model) for model in model_dict.values()],
+        keys=model_dict.keys(), names=new_dimension_name,
+    )
+    """
 
     storage_caps = add_storage_carriers(
         pd.concat(
@@ -116,11 +218,13 @@ def combine_scenarios_to_one_dict(
             ),
         energy_flows["flow_out"]
         )
-    names = names.reindex(energy_caps.index.get_level_values("techs").unique()).fillna(NEW_TECH_NAMES)
-    assert names.isna().sum() == 0
+    
+    energy_caps_all_carriers.index.get_level_values("techs").unique()
+    names = names.reindex(energy_caps_all_carriers.index.get_level_values("techs").unique()).fillna(NEW_TECH_NAMES).fillna(OLD_TECH_NAMES)
+    # assert names.isna().sum() == 0
 
     for df in [
-        output_costs, energy_caps, energy_flows_sum, energy_flows_max,
+        output_costs, energy_caps_all_carriers, energy_caps_primary_carrier, energy_flows_sum, energy_flows_max,
         energy_flows_monthly_sum, energy_flows_monthly_max, storage_caps
     ]:
         dataframe_to_dict_elements(df, all_data_dict)
@@ -130,11 +234,15 @@ def combine_scenarios_to_one_dict(
         dataframe_to_dict_elements(storage, all_data_dict)
     else:
         del all_data_dict["net_import"]
+        
+    # delate nan values (included already in the package writing command of friendly data library
+    
+    for keys in all_data_dict.keys():
+        all_data_dict[keys] = all_data_dict[keys].dropna()
 
     all_data_dict["names"] = names
 
     return all_data_dict
-
 
 def dataframe_to_dict_elements(df, data_dict):
     """DF to dict of series, with key names == column names"""
@@ -154,7 +262,6 @@ def get_energy_caps(model, **kwargs):
             .to_frame("nameplate_capacity")
             .div(10)
         )
-
 
 def get_storage_caps(model, **kwargs):
     """Get storage capacity"""
@@ -188,6 +295,8 @@ def get_storage(model, **kwargs):
 def get_valid_loc_techs(df):
     return df.index.get_level_values("locs") + "::" + df.index.get_level_values("techs")
 
+def get_valid_techs(df):
+    return df.index.get_level_values("techs")
 
 def get_a_flow(model, flow_direction, timeseries_agg, **kwargs):
     mapped_da = map_da(
@@ -263,8 +372,36 @@ def get_transmission_data(data_dict, model_dict, new_dimension_name, **kwargs):
         return df.set_index(level, append=True)
 
     def _rename_tech(x):
-        return "ac_transmission" if x.startswith("ac") else "dc_transmission"
-
+        if x.startswith("ac"):
+            tech_name = "ac_transmission"
+        elif x.startswith("dc"):
+            tech_name = "dc_transmission"
+        elif x.startswith("co2_transmission"):
+            tech_name = "co2_transmission"
+        elif x.startswith("co2_tanker"):
+            tech_name = "co2_tanker"
+        else:
+            tech_name = "unrecognised"
+        return tech_name
+        
+    def _get_unit(x):
+        if "transmission" in x:
+            unit = "tw"
+        elif "co2" in x:
+            unit = "100kt"
+        else:
+            unit = "n.a."
+        return unit
+        
+    def _get_carrier(x):
+        if "transmission" in x:
+            unit = "electricity"
+        elif "co2" in x:
+            unit = "co2"
+        else:
+            unit = "n.a."
+        return unit
+        
     def _get_transmission_flows(model, timeseries_agg, **kwargs):
         flows = get_flows(model, timeseries_agg, transmission_only=True, **kwargs)
 
@@ -306,7 +443,7 @@ def get_transmission_data(data_dict, model_dict, new_dimension_name, **kwargs):
             _rename_remote(df, level=_from)
             .rename(_rename_tech, level="techs")
             .rename_axis(columns=_to)
-            .assign(unit="tw", carriers="electricity")
+            .assign(unit=lambda x: x.index.get_level_values('techs').map(_get_unit), carriers=lambda x: x.index.get_level_values('techs').map(_get_carrier))  #.assign(unit="tw",carriers="electricity")
             .set_index(["unit", "carriers"], append=True)
             .stack()
             .div(10)
@@ -427,12 +564,92 @@ def add_storage_carriers(storage_df, energy_flows):
         .reorder_levels(energy_flows.index.names)
     )
 
+def get_carrier_unit_per_energy_cap(energy_flows_max):
+    energy_flow = energy_flows_max["flow_out_max"].reset_index()
+    # energy_flow = energy_flow.dropna()
+    energy_flow = energy_flow[["techs", "carriers", "unit"]]
+    energy_flow = energy_flow.drop_duplicates(keep='first')
+
+    df = copy.deepcopy(energy_flow)
+
+    df.loc[(df.unit == 'twh'),'unit']='tw'
+    df.loc[(df.unit == 'billion_km'),'unit']='billion_km_per_hour'
+    df.loc[(df.unit == '100kt'),'unit']='100kt_per_hour'
+    df = df.reset_index(drop=True)
+
+    list_keys = list(df["techs"])
+    list_carriers = list(df["carriers"])
+    list_unit = list(df["unit"])
+
+    carrier_dict = dict(zip(list_keys, list_carriers))
+    unit_dict = dict(zip(list_keys, list_unit))
+
+    return carrier_dict, unit_dict
+
+def add_tech_carriers(tech_df, energy_flows): #mi sa da togliere
+    _flows = energy_flows.reset_index("carriers")
+    _flows = _flows[~_flows.index.duplicated()]
+    carriers = (
+        _flows
+        .reorder_levels(tech_df.index.names)
+        .reindex(tech_df.index)
+        .carriers
+    )
+    return (
+        tech_df
+        .assign(carriers=carriers)
+        .set_index("carriers", append=True)
+        .reorder_levels(energy_flows.index.names)
+    )
+
+def add_units_nameplate_capacity(energy_caps):
+    energy_caps_unit = energy_caps.reset_index("techs")
+    energy_caps_unit["unit"]="tw"
+    energy_caps_unit.loc[energy_caps_unit.techs.str.find('transport_') > -1, 'unit'] = 'billion_km'
+    energy_caps_unit.loc[energy_caps_unit.techs.str.find('dac') > -1, 'unit'] = '100kt'
+    energy_caps_unit.loc[energy_caps_unit.techs.str.find('demand_co2') > -1, 'unit'] = '100kt'
+    energy_caps_unit = energy_caps_unit.set_index(["techs","unit"], append=True)
+    
+    return energy_caps_unit
+
+def add_units_all_caps(energy_flows_max, timestep):
+    # In this dataframe, all the non-primary output energy outflows are included.
+    energy_caps_from_flows = energy_flows_max["flow_out_max"].dropna()/timestep
+    energy_caps_from_flows = energy_caps_from_flows.rename(lambda x: "tw" if x == "twh" else x + "_per_hour", level="unit")
+    energy_caps_from_flows= energy_caps_from_flows.to_frame().rename(columns={"flow_out_max":"nameplate_capacity"})
+    
+    return energy_caps_from_flows
+
+
+def adding_carrier_unit_to_energy_cap(energy_caps, unit_dict, carrier_dict, ZERO_THRESHOLD):
+    _energy_caps = energy_caps.reset_index("techs")
+    _energy_caps["carriers"]=_energy_caps["techs"].map(lambda x: carrier_dict[x])
+    _energy_caps["unit"]=_energy_caps["techs"].map(lambda x: unit_dict[x])
+    _energy_caps = _energy_caps.set_index("techs", append=True)
+    _energy_caps = _energy_caps.set_index("carriers", append=True)
+    _energy_caps = _energy_caps.set_index("unit", append=True)
+    energy_caps_carrier_unit = _energy_caps.reorder_levels([0,2,1,3,4])
+    energy_caps_carrier_unit = energy_caps_carrier_unit[energy_caps_carrier_unit["nameplate_capacity"] > ZERO_THRESHOLD]
+    energy_caps_carrier_unit = energy_caps_carrier_unit.rename(columns={"nameplate_capacity":"nameplate_capacity_primary_carrier"})
+
+    return energy_caps_carrier_unit
+
+
+def adding_carrier_to_energy_caps(energy_caps_unit, singlecarrier_techs_dict, multicarrier_techs_dict, loc_newtech_dict):
+    tech_carrier_dict = {**multicarrier_techs_dict, **singlecarrier_techs_dict, **loc_newtech_dict}
+    energy_caps_unit_carrier = energy_caps_unit.reset_index("techs")
+    energy_caps_unit_carrier["carrier"]=energy_caps_unit_carrier["techs"].map(lambda x: tech_carrier_dict[x])
+
+    return energy_caps_unit_carrier
 
 def add_units_to_caps(energy_caps, energy_flows, cost_optimal_model):
     """
     Get units for nameplate capacities and add additional capacities for multi-carrier
     technologies, to give an approximate maximum capacity for non-primary carriers.
     """
+    # print(cost_optimal_model.inputs)
+    
+    
     multicarrier_primary_info = split_loc_techs(
         cost_optimal_model.inputs.lookup_primary_loc_tech_carriers_out,
         return_as="Series"
@@ -452,6 +669,7 @@ def add_units_to_caps(energy_caps, energy_flows, cost_optimal_model):
         .groupby(level="techs").first()
         .set_index("carriers", append=True)
     )
+    
     flows_out_reset_carriers = energy_flows["flow_out_max"].dropna().reset_index("carriers")
     secondary_carrier = (
         flows_out_reset_carriers
@@ -463,7 +681,10 @@ def add_units_to_caps(energy_caps, energy_flows, cost_optimal_model):
         .stack(["techs", "carriers"])
         .reorder_levels(energy_flows.index.names)
     )
-
+    
+    # flows_out_reset_carriers = energy_flows["flow_out_max"].dropna().reset_index("carriers")
+    # dataframe = flows_out_reset_carriers[flows_out_reset_carriers.index.duplicated(keep=False)].set_index("carriers", append=True).squeeze().unstack(["techs", "carriers"]).stack(["techs", "carriers"])
+    
     all_primary_carrier = energy_flows["flow_out_max"].dropna().drop(secondary_carrier.index)
     secondary_carrier = secondary_carrier.rename(lambda x: "tw" if x == "twh" else x + "_per_hour", level="unit")
     all_primary_carrier = all_primary_carrier.rename(lambda x: "tw" if x == "twh" else x + "_per_hour", level="unit")
@@ -481,6 +702,44 @@ def add_units_to_caps(energy_caps, energy_flows, cost_optimal_model):
 
     return energy_caps_with_all_units
 
+def get_final_energy_cap(energy_cap_primary, energy_cap_all, energy_flows_sum, ZERO_THRESHOLD): #to be added
+    # # energy_cap_primary: energy_caps_primary_carrier
+    # # energy_cap_all: energy_caps_from_flows
+    # energy_cap_primary = energy_cap_primary.rename(columns={"nameplate_capacity_primary_carrier":"nameplate_capacity"})
+    # energy_cap_df = energy_cap_primary.append(energy_cap_all)
+    # energy_cap_df = energy_cap_df[~energy_cap_df.index.duplicated(keep='first')]
+    # energy_cap_df = energy_cap_df[energy_cap_df["nameplate_capacity"] > ZERO_THRESHOLD]
+    
+    # Obtain nameplate capacity
+    energy_cap_primary = energy_cap_primary.rename(columns={"nameplate_capacity_primary_carrier":"nameplate_capacity"})
+    energy_cap_df = energy_cap_primary.append(energy_cap_all)
+    energy_cap_df = energy_cap_df[~energy_cap_df.index.duplicated(keep='first')]
+    energy_cap_df = energy_cap_df[energy_cap_df["nameplate_capacity"] > ZERO_THRESHOLD]
+
+    # Ugly search for all possible combinations of technology and carrier.
+    # My heart weeps at the sight of this thing.
+    energy_cap_df = energy_cap_df.reset_index()
+    energy_cap_df["flow"] = np.nan
+
+    flow_search = energy_flows_sum.reset_index()
+    for tech in energy_cap_df["techs"].unique():
+        for carrier in energy_cap_df["carriers"].unique():
+            cap_slice = energy_cap_df[(energy_cap_df["techs"] == tech) & (energy_cap_df["carriers"] == carrier)].copy()
+            if not cap_slice.empty:
+                flow_info = flow_search[(flow_search["techs"] == tech) & (flow_search["carriers"] == carrier)].iloc[0]
+                # Identify flow direction
+                if not np.isnan(flow_info["flow_in_sum"]) and not np.isnan(flow_info["flow_out_sum"]):
+                    cap_slice["flow"] = "both"
+                elif not np.isnan(flow_info["flow_in_sum"]):
+                    cap_slice["flow"] = "in"
+                elif not np.isnan(flow_info["flow_out_sum"]):
+                    cap_slice["flow"] = "out"
+                else:
+                    raise ValueError("This technology has no output in either direction. Thus, I explode with massive force.")
+                energy_cap_df.update(cap_slice)
+    energy_cap_df = energy_cap_df.set_index(["scenario", "techs", "locs", "carriers", "unit", "flow"])
+    return energy_cap_df    
+
 
 def get_output_costs(
     model, cost_class="monetary", unit="billion_2015eur", mapping=COST_NAME_MAPPING, **kwargs
@@ -491,7 +750,7 @@ def get_output_costs(
     costs = {}
     for _cost in ["cost", "cost_investment", "cost_var"]:
         cost_da = model._model_data[_cost].loc[{"costs": cost_class}]
-        mapped_da = map_da(cost_da, keep_demand=False, **kwargs)
+        mapped_da = map_da(cost_da, keep_demand=True, **kwargs) # keep_demand = False
 
         cost_series = clean_series(mapped_da, **kwargs)
         if cost_series is None:
@@ -549,6 +808,29 @@ def rename_locations(locations, region_group):
     else:
         return locations.replace(region_group)
 
+def get_multicarrier_techs(tech_carrier_df): # TO BE REMOVED
+    multicarrier_techs = tech_carrier_df[tech_carrier_df.duplicated('tech', keep=False) == True]
+    multicarrier_techs_dict = {}    
+    for tech in multicarrier_techs.tech:
+        multicarrier_techs_dict[tech]=list(multicarrier_techs.loc[multicarrier_techs.tech == tech]["carrier"].values)
+    
+    return multicarrier_techs_dict
+
+def get_singlecarrier_techs(tech_carrier_df): # TO BE REMOVED
+    singlecarrier_techs = tech_carrier_df[tech_carrier_df.duplicated('tech', keep=False) == False]
+    singlecarrier_techs = singlecarrier_techs.set_index(['tech'])
+    singlecarrier_techs_dict = singlecarrier_techs.to_dict()['carrier']
+    
+    return singlecarrier_techs_dict
+
+def get_tech_carrier_df(model): # TO BE REMOVED
+    loc_tech_carrier = pd.Series(model._model_data.loc_tech_carriers_prod.values)
+    loc_tech_carrier_split = loc_tech_carrier.str.split("::",expand=True)
+    loc_tech_carrier_split.rename(columns={0: 'region', 1: 'tech', 2: "carrier"}, inplace=True)
+    region_1 = list(loc_tech_carrier_split["region"])[0]
+    tech_carrier_df = loc_tech_carrier_split[loc_tech_carrier_split.region == region_1].iloc[:,1:].sort_values(by="tech",kind="mergesort")
+
+    return tech_carrier_df
 
 def get_cleaned_dim_mapping(
     da, dim, keep_demand=True, dim_agg="sum",
@@ -595,7 +877,8 @@ def get_cleaned_dim_mapping(
 
     if "carriers" in dim:
         split_dim.loc[split_dim[2].str.endswith("_heat"), 2] = "heat"
-        split_dim.loc[split_dim[2].str.endswith("_transport"), 2] = "transport"
+        split_dim.loc[split_dim[2].str.endswith("co2_transport"), 2] = "co2_pipeline" # to be removed
+        split_dim.loc[split_dim[2].str.endswith("_transport"), 2] = "transport" # removed for PATHFNDR to keep heavy and light duty vehicles separated
         for fuel in ["diesel", "kerosene", "methane", "methanol"]:
             split_dim.loc[split_dim[2] == f"syn_{fuel}", 2] = fuel
         new_dim = ("locs", "techs", "carriers")
@@ -621,80 +904,31 @@ def agg_da(da, agg_method, agg_dim=None, **kwargs):
     if agg_method == "sum":
         agg_kwargs.update({"min_count": 1})
     return getattr(da, agg_method)(agg_dim, **agg_kwargs)
+    
+def subfinder(mylist, pattern):
+    matches = []
+    for i in range(len(mylist)):
+        if mylist[i] == pattern[0] and mylist[i:i+len(pattern)] == pattern:
+            matches.append(pattern)
+    return matches
 
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("indir", help="Directory containing all scenario files")
-    parser.add_argument("outdir", help="Filepath to dump friendly data")
-    parser.add_argument(
-        "--baseline_filename", default=None,
-        help="""
-        Filename of file found in indir not to include in the datapackage but
-        from which input data (e.g. tech names, resolution, input costs) will be collated.
-        NOTE: this file won't be included in the output.
-        If not given, input data will be taken from the first available file,
-        whose outputs *will* be included in the output.
-        """
-    )
-    parser.add_argument(
-        "--region_group", type=str, default="countries",
-        help="""
-        Mapping from model regions to output regions.
-        Default is 'countries', i.e. all outputs will be aggregated to national level.
-        Anything user-defined must be in the form of dictionary mapping for any regions that will be aggregated.
-        E.g. "{'GRC_1': 'GRC', 'GRC_2': 'GRC', ..., 'MNE_1': 'rest', 'BIH_1': 'rest', ...}"
-        would aggregate all Greece subregions to the country level and all other regions in the model to the
-        region 'rest'.
-        Any regions not given in the mapping will be kept at their native resolution.
-        That means that an empty dictionary will result in all regions remaining at their native resolution
-        """
-    )
-    parser.add_argument(
-        '--include_ts_in_output', action='store_true',
-        help="""
-        If set, high-resolution temporal data (at the native resolution of the model) will be included in the datapackage. These files will likely be large.
-        """
-    )
-
-    parser.add_argument(
-        '--meta_description', type=str,
-        default="Calliope output dataset for SENTINEL intercomparison free model run scenarios"
-    )
-    parser.add_argument(
-        '--meta_name', type=str,
-        default="calliope-sentinel-free-model-runs"
-    )
-    parser.add_argument(
-        '--meta_keywords', nargs="+", type=str,
-        default=["calliope", "sentinel", "free-model-runs"]
-    )
-    parser.add_argument(
-        '--licenses', type=str,
-        default="CC-BY-4.0"
-    )
-
-    parser.set_defaults(include_ts_in_output=False)
-    args = parser.parse_args()
-
-    model_dict, cost_optimal_model = get_models_from_file(
-        args.indir,
-        baseline_filename=args.baseline_filename,
-        use_filename_as_scenario=True
-    )
-    if args.region_group == "countries":
-        region_group = "countries"
-    else:
-        region_group = calliope.AttrDict.from_yaml_string(args.region_group).as_dict()
-
-    data_dict = combine_scenarios_to_one_dict(
-        model_dict, cost_optimal_model, region_group=region_group
-    )
-
-    meta = {
-        "name": args.meta_name,
-        "description": args.meta_description,
-        "keywords": args.meta_keywords,
-        "licenses": args.licenses
-    }
-    write_dpkg(data_dict, args.outdir, meta, include_timeseries_data=args.include_ts_in_output)
+def df_subset(dataframe, tech_list):
+    dataframe_sorted = copy.deepcopy(dataframe)
+    for tech in tech_list:
+        dataframe_sorted = dataframe_sorted[dataframe_sorted.index.get_level_values("techs") != tech]
+    return dataframe_sorted
+    
+def tech_list_subset(dataframe,keyword):
+    tech_list = list((dataframe[dataframe.index.get_level_values("techs").str.find(keyword) == 0]).index.get_level_values("techs").unique())
+    return tech_list
+    
+"""    pass more than one keyword to save the techs in a sinle list
+def tech_list_subset(dataframe,keyword,**kwargs):
+    keyword_list = keyword.append(**kwargs)
+    
+    for k in keyword_list
+    tech_list = list((dataframe[dataframe.index.get_level_values("techs").str.find(keyword) == 0]).index.get_level_values("techs").unique())
+    
+    return tech_list
+"""    
+    
