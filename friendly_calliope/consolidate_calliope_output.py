@@ -122,7 +122,7 @@ def combine_scenarios_to_one_dict(
     if isinstance(new_dimension_name, str):
         new_dimension_name = [new_dimension_name]
      
-    cost_optimal_model = list(model_dict.values())[0]
+    # cost_optimal_model = list(model_dict.values())[0]
     #print("model.inputs type:  ",type(cost_optimal_model.inputs))
     #print("model.inputs.timesteps:  ",cost_optimal_model.inputs.timesteps)
     #print("len of model.inputs.timesteps:  ",len(list(cost_optimal_model.inputs.timesteps)))
