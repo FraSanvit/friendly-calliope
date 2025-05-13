@@ -9,4 +9,8 @@ For more information on friendly data, see [here](https://github.com/sentinel-en
 
 This branch is suitable for processing multiple system designs within a SPORES MGA run.
 
-To start processing, run ``friendly-data-results.py`` in a command line. The first argument is the path to results folder, and the second argument is the path to intended directory to store the processed friendly result in ``.csv`` format.
+To start processing, run ``friendly-data-results.py`` in a command line. The first argument is the path to results folder, and the second argument is the path to intended directory to store the processed friendly result in ``.csv`` format. An example is the following.
+
+```bash
+python friendly-data-results.py results/ friendly-results/
+```
